@@ -2,11 +2,11 @@ package main
 
 import (
 	"flag"
-	"github.com/gtfierro/giles2/archiver"
-	"github.com/gtfierro/giles2/http"
-	"github.com/gtfierro/giles2/msgpack"
-	"github.com/gtfierro/giles2/tcpjson"
-	"github.com/gtfierro/giles2/websocket"
+	"github.com/jf87/giles2/archiver"
+	"github.com/jf87/giles2/http"
+	"github.com/jf87/giles2/msgpack"
+	"github.com/jf87/giles2/tcpjson"
+	"github.com/jf87/giles2/websocket"
 	"github.com/op/go-logging"
 	"os"
 	"runtime"

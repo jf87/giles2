@@ -2,7 +2,7 @@ package tcpjson
 
 import (
 	"encoding/json"
-	giles "github.com/gtfierro/giles2/archiver"
+	giles "github.com/jf87/giles2/archiver"
 	"net"
 	"sync"
 )

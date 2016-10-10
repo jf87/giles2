@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/fatih/color"
-	giles "github.com/gtfierro/giles2/archiver"
+	giles "github.com/jf87/giles2/archiver"
 	"github.com/op/go-logging"
 	"net"
 	"os"

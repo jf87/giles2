@@ -5,7 +5,7 @@ import (
 	"fmt"
 	qtree "github.com/SoftwareDefinedBuildings/btrdb/qtree"
 	capn "github.com/glycerine/go-capnproto"
-	btrdb "github.com/gtfierro/giles2/archiver/btrdbcapnp"
+	btrdb "github.com/jf87/giles2/archiver/btrdbcapnp"
 	"github.com/satori/go.uuid"
 	"net"
 	"sync"

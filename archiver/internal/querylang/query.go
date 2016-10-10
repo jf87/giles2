@@ -7,7 +7,7 @@ import __yyfmt__ "fmt"
 import (
 	"bufio"
 	"fmt"
-	"github.com/gtfierro/giles2/internal/unitoftime"
+	"github.com/jf87/giles2/internal/unitoftime"
 	"github.com/taylorchu/toki"
 	"gopkg.in/mgo.v2/bson"
 	"strconv"

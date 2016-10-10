@@ -1,7 +1,7 @@
 package archiver
 
 import (
-	"github.com/gtfierro/giles2/archiver/internal/querylang"
+	"github.com/jf87/giles2/archiver/internal/querylang"
 	"gopkg.in/mgo.v2/bson"
 	"sync"
 )

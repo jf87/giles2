@@ -1,5 +1,5 @@
 // Package msgpack implements an MsgPack/UDP interface to the Archiver API at
-// http://godoc.org/github.com/gtfierro/2giles/archiver
+// http://godoc.org/github.com/jf87/2giles/archiver
 //
 // An example of a valid object is a msgpack map (fixmap or otherwise) with the following
 // fields:
@@ -13,7 +13,7 @@
 package msgpack
 
 import (
-	"github.com/gtfierro/giles2/archiver"
+	"github.com/jf87/giles2/archiver"
 	"github.com/op/go-logging"
 	"net"
 	"os"

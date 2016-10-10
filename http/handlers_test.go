@@ -3,7 +3,7 @@ package http
 import (
 	"fmt"
 	"github.com/drewolson/testflight"
-	"github.com/gtfierro/giles2/archiver"
+	"github.com/jf87/giles2/archiver"
 	"github.com/stretchr/testify/assert"
 	"strings"
 	"testing"

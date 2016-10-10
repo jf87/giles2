@@ -6,7 +6,7 @@ import (
 	"bufio"
 	"fmt"
 	"github.com/taylorchu/toki"
-    "github.com/gtfierro/giles2/internal/unitoftime"
+    "github.com/jf87/giles2/internal/unitoftime"
 	"strconv"
 	"gopkg.in/mgo.v2/bson"
     _time "time"

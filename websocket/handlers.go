@@ -2,7 +2,7 @@ package websocket
 
 import (
 	"github.com/gorilla/websocket"
-	giles "github.com/gtfierro/giles2/archiver"
+	giles "github.com/jf87/giles2/archiver"
 	"github.com/julienschmidt/httprouter"
 	"github.com/op/go-logging"
 	"net"

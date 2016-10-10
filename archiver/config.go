@@ -94,7 +94,7 @@ func LoadConfig(filename string) *Config {
 	}
 	err = gcfg.ReadFileInto(&configuration, "./giles.cfg")
 	if err != nil {
-		log.Fatal("Could not find configuration files ./giles.cfg. Try retreiving a sample from github.com/gtfierro/giles")
+		log.Fatal("Could not find configuration files ./giles.cfg. Try retreiving a sample from github.com/jf87/giles")
 	} else {
 		return &configuration
 	}

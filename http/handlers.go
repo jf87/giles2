@@ -23,14 +23,15 @@ package http
 
 import (
 	"encoding/json"
-	"github.com/gtfierro/giles2/archiver"
-	"github.com/julienschmidt/httprouter"
-	"github.com/op/go-logging"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
+
+	"github.com/jf87/giles2/archiver"
+	"github.com/julienschmidt/httprouter"
+	"github.com/op/go-logging"
 )
 
 // logger

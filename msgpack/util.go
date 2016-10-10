@@ -3,8 +3,8 @@ package msgpack
 import (
 	"bytes"
 	"errors"
-	"github.com/gtfierro/giles2/archiver"
-	"github.com/gtfierro/giles2/internal/unitoftime"
+	"github.com/jf87/giles2/archiver"
+	"github.com/jf87/giles2/internal/unitoftime"
 	"gopkg.in/vmihailenco/msgpack.v2"
 	"strings"
 )
