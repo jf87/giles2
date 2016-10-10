@@ -2,7 +2,7 @@ package archiver
 
 import (
 	"flag"
-	"github.com/gtfierro/giles2/common"
+	"github.com/jf87/giles2/common"
 	"gopkg.in/mgo.v2/bson"
 	"net"
 	"os"

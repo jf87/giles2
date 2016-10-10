@@ -2,16 +2,17 @@ package bosswave
 
 import (
 	"fmt"
-	giles "github.com/gtfierro/giles2/archiver"
-	"github.com/gtfierro/giles2/common"
-	"github.com/gtfierro/giles2/plugins/bosswave/util"
-	"github.com/gtfierro/ob"
-	"github.com/pkg/errors"
-	"github.com/satori/go.uuid"
-	bw "gopkg.in/immesys/bw2bind.v5"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gtfierro/ob"
+	giles "github.com/jf87/giles2/archiver"
+	"github.com/jf87/giles2/common"
+	"github.com/jf87/giles2/plugins/bosswave/util"
+	"github.com/pkg/errors"
+	"github.com/satori/go.uuid"
+	bw "gopkg.in/immesys/bw2bind.v5"
 )
 
 var NAMESPACE_UUID = uuid.FromStringOrNil("b26d2e62-333e-11e6-b557-0cc47a0f7eea")

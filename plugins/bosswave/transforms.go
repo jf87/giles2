@@ -1,7 +1,7 @@
 package bosswave
 
 import (
-	"github.com/gtfierro/giles2/common"
+	"github.com/jf87/giles2/common"
 	bw "gopkg.in/immesys/bw2bind.v5"
 )
 

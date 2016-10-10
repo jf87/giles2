@@ -2,7 +2,7 @@ package api
 
 import (
 	"fmt"
-	messages "github.com/gtfierro/giles2/plugins/bosswave"
+	messages "github.com/jf87/giles2/plugins/bosswave"
 	bw "gopkg.in/immesys/bw2bind.v5"
 	"math/rand"
 	"strings"

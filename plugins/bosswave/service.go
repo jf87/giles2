@@ -2,10 +2,10 @@ package bosswave
 
 import (
 	"fmt"
-	giles "github.com/gtfierro/giles2/archiver"
-	"github.com/gtfierro/giles2/common"
-	"github.com/gtfierro/giles2/plugins/bosswave/util"
-	"github.com/gtfierro/giles2/plugins/bosswave/views"
+	giles "github.com/jf87/giles2/archiver"
+	"github.com/jf87/giles2/common"
+	"github.com/jf87/giles2/plugins/bosswave/util"
+	"github.com/jf87/giles2/plugins/bosswave/views"
 	"github.com/op/go-logging"
 	"github.com/pkg/errors"
 	bw "gopkg.in/immesys/bw2bind.v5"

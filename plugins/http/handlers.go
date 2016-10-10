@@ -1,5 +1,5 @@
 // Package http implements an HTTP interface to the Archiver API at
-// http://godoc.org/github.com/gtfierro/2giles/archiver
+// http://godoc.org/github.com/jf87/2giles/archiver
 //
 // An example of a valid sMAP object is
 //    {
@@ -31,9 +31,6 @@ import (
 
 	giles "github.com/jf87/giles2/archiver"
 	"github.com/jf87/giles2/common"
-	"github.com/julienschmidt/httprouter"
-	"github.com/op/go-logging"
-
 	"github.com/julienschmidt/httprouter"
 	"github.com/op/go-logging"
 )

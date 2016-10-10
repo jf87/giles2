@@ -3,7 +3,7 @@ package views
 import (
 	"encoding/base64"
 	"fmt"
-	"github.com/gtfierro/giles2/plugins/bosswave/util"
+	"github.com/jf87/giles2/plugins/bosswave/util"
 	"github.com/pkg/errors"
 	bw "gopkg.in/immesys/bw2bind.v5"
 	"reflect"

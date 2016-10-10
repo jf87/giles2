@@ -32,7 +32,7 @@ For now, this operates on `interface{}`s.
 package main
 
 import (
-    ob "github.com/gtfierro/giles2/objectbuilder"
+    ob "github.com/jf87/giles2/objectbuilder"
     "fmt"
 )
 

@@ -3,7 +3,7 @@ package archiver
 // mongo provider for metadata store
 import (
 	"fmt"
-	"github.com/gtfierro/giles2/common"
+	"github.com/jf87/giles2/common"
 	"github.com/karlseguin/ccache"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"

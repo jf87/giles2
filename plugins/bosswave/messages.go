@@ -3,7 +3,7 @@ package bosswave
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/gtfierro/giles2/common"
+	"github.com/jf87/giles2/common"
 	bw "gopkg.in/immesys/bw2bind.v5"
 	"math"
 )
