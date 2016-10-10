@@ -2,16 +2,21 @@ package main
 
 import (
 	"flag"
+
 	"github.com/jf87/giles2/archiver"
-	"github.com/jf87/giles2/http"
-	"github.com/jf87/giles2/msgpack"
-	"github.com/jf87/giles2/tcpjson"
-	"github.com/jf87/giles2/websocket"
+	"github.com/jf87/giles2/plugins/bosswave"
+	"github.com/jf87/giles2/plugins/http"
+	"github.com/jf87/giles2/plugins/msgpack"
+	"github.com/jf87/giles2/plugins/tcpjson"
+	"github.com/jf87/giles2/plugins/websocket"
 	"github.com/op/go-logging"
+
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
+	"syscall"
 	"time"
 )
 
@@ -31,6 +36,27 @@ func init() {
 }
 
 func main() {
+
+	signals := make(chan os.Signal, 1)
+	done := make(chan bool)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-signals
+		log.Noticef("Got signal %v", sig)
+		done <- true
+	}()
+
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			log.Infof("Number of active goroutines %v", runtime.NumGoroutine())
+		}
+	}()
+
+	//time.AfterFunc(30*time.Second, func() {
+	//	panic("STOP")
+	//})
+
 	flag.Parse()
 	config := archiver.LoadConfig(*configfile)
 	archiver.PrintConfig(config)
@@ -65,6 +91,10 @@ func main() {
 		go http.Handle(a, *config.HTTP.Port)
 	}
 
+	if config.BOSSWAVE.Enabled {
+		go bosswave.Handle(a, &config.BOSSWAVE)
+	}
+
 	if config.WebSocket.Enabled {
 		go websocket.Handle(a, *config.WebSocket.Port)
 	}
@@ -77,24 +107,5 @@ func main() {
 		go tcpjson.Handle(a, *config.TCPJSON.AddPort, *config.TCPJSON.QueryPort, *config.TCPJSON.SubscribePort)
 	}
 
-	idx := 0
-	for {
-		time.Sleep(5 * time.Second)
-		idx += 5
-		if config.Profile.Enabled && idx == *config.Profile.BenchmarkTimer {
-			if *config.Profile.MemProfile != "" {
-				f, err := os.Create(*config.Profile.MemProfile)
-				if err != nil {
-					log.Panic(err)
-				}
-				pprof.WriteHeapProfile(f)
-				f.Close()
-				trace.Stop()
-				return
-			}
-			if *config.Profile.CpuProfile != "" {
-				return
-			}
-		}
-	}
+	<-done
 }

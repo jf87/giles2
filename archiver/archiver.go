@@ -3,11 +3,14 @@ package archiver
 
 import (
 	"fmt"
-	"github.com/jf87/giles2/archiver/internal/querylang"
-	"github.com/op/go-logging"
 	"net"
 	"os"
 	"time"
+
+	"github.com/jf87/giles2/archiver/internal/querylang"
+	"github.com/jf87/giles2/common"
+	"github.com/op/go-logging"
+	"github.com/pkg/errors"
 )
 
 // logger
@@ -28,19 +31,12 @@ type Archiver struct {
 	tsStore TimeseriesStore
 	// metadata store
 	mdStore MetadataStore
-	// permissions manager
-	pm permissionsManager
 	// transaction coalescer
-	txc *transactionCoalescer
-	qp  *querylang.QueryProcessor
-	// republisher
-	repub *Republisher
+	qp *querylang.QueryProcessor
 	// broker
 	broker *Broker
 	// metrics
 	metrics metricMap
-	// enforce ephemral key checks
-	enforceKeys bool
 }
 
 // Returns a new archiver object from a configuration. Will Fatal out of the
@@ -50,12 +46,9 @@ func NewArchiver(c *Config) (a *Archiver) {
 	var (
 		mdStore MetadataStore
 		tsStore TimeseriesStore
-		pm      permissionsManager
 	)
 
 	a = &Archiver{}
-
-	a.enforceKeys = c.Archiver.EnforceKeys
 
 	switch *c.Archiver.MetadataStore {
 	case "mongo":
@@ -64,17 +57,14 @@ func NewArchiver(c *Config) (a *Archiver) {
 			log.Fatalf("Error parsing Mongo address: %v", err)
 		}
 		config := &mongoConfig{
-			address:     mongoaddr,
-			enforceKeys: c.Archiver.EnforceKeys,
+			address: mongoaddr,
 		}
 		mdStore = newMongoStore(config)
-		pm = newMongoPermissionsManager(config)
 	default:
 		log.Fatalf(*c.Archiver.MetadataStore, " is not a recognized metadata store")
 	}
 
 	a.mdStore = mdStore
-	a.pm = pm
 
 	switch *c.Archiver.TimeseriesStore {
 	case "quasar":
@@ -83,9 +73,8 @@ func NewArchiver(c *Config) (a *Archiver) {
 			log.Fatalf("Error parsing Quasar address: %v", err)
 		}
 		config := &quasarConfig{
-			addr:           qsraddr,
-			mdStore:        a.mdStore,
-			maxConnections: *c.Archiver.MaxConnections,
+			addr:    qsraddr,
+			mdStore: a.mdStore,
 		}
 		tsStore = newQuasarDB(config)
 	case "btrdb":
@@ -94,21 +83,18 @@ func NewArchiver(c *Config) (a *Archiver) {
 			log.Fatalf("Error parsing BtrDB address: %v", err)
 		}
 		config := &btrdbConfig{
-			addr:           btrdbaddr,
-			mdStore:        a.mdStore,
-			maxConnections: *c.Archiver.MaxConnections,
+			addr:    btrdbaddr,
+			mdStore: a.mdStore,
 		}
-		tsStore = newBtrDB(config)
+		tsStore = newBtrIface(config)
 	default:
 		log.Fatalf(*c.Archiver.TimeseriesStore, " is not a recognized timeseries store")
 	}
 
 	a.tsStore = tsStore
 
-	a.txc = newTransactionCoalescer(&a.tsStore, &a.mdStore)
 	a.qp = querylang.NewQueryProcessor()
 
-	a.repub = NewRepublisher(a)
 	a.broker = NewBroker(a)
 
 	a.metrics = make(metricMap)
@@ -130,30 +116,50 @@ func (a *Archiver) startReport() {
 	}()
 }
 
-// Takes an incoming SmapMessage object (from a client) and does the following:
+// Takes an incoming common.SmapMessage object (from a client) and does the following:
 //  - Checks the incoming message against the ApiKey to verify it is valid to write
 //  - Saves the attached metadata (if any) to the metadata store
 //  - Reevaluates any dynamic subscriptions and pushes to republish clients
 //  - Saves the attached readings (if any) to the timeseries database
-// These last 2 steps happen in parallel
-func (a *Archiver) AddData(msg *SmapMessage, ephkey EphemeralKey) (err error) {
-	if a.enforceKeys && !a.pm.ValidEphemeralKey(ephkey) {
-		return fmt.Errorf("Ephemeral key %v is not valid", ephkey)
-	}
-
+func (a *Archiver) AddData(msg *common.SmapMessage) (err error) {
 	// save metadata
 	err = a.mdStore.SaveTags(msg)
 	if err != nil {
 		return err
 	}
 
-	//TODO reevaluate subscriptions, push to clients
+	// fix inconsistencies
+	var (
+		uot common.UnitOfTime
+		uom string
+	)
+	if uot, err = a.mdStore.GetUnitOfTime(msg.UUID); uot == 0 && err == nil {
+		if len(msg.Readings) > 0 {
+			uot = common.GuessTimeUnit(msg.Readings[0].GetTime())
+		}
+	} else if err != nil {
+		return err
+	}
+	for _, rdg := range msg.Readings {
+		rdg.SetUOT(uot)
+	}
+
+	if uom, err = a.mdStore.GetUnitOfMeasure(msg.UUID); uom == "" && err == nil {
+		if msg.Properties == nil {
+			msg.Properties = &common.SmapProperties{StreamType: common.NUMERIC_STREAM}
+		}
+		msg.Properties.UnitOfMeasure = "n/a"
+		err = a.mdStore.SaveTags(msg)
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+
 	//save timeseries data
-	err = a.txc.AddSmapMessage(msg)
 	a.metrics["adds"].Mark(1)
-	//a.tsStore.AddMessage(msg)
-	//a.repub.TriggerChangesMessage(msg)
-	//a.repub.Republish(msg)
+	a.tsStore.AddMessage(msg)
 	a.broker.HandleMessage(msg)
 	return err
 }
@@ -161,115 +167,59 @@ func (a *Archiver) AddData(msg *SmapMessage, ephkey EphemeralKey) (err error) {
 // Need to think about how to transfer the results of these queries to the handlers that are
 // asking for them and need to transform them into their own internal representations (e.g.
 // JSON, MsgPack, etc). What are the data patterns we are seeing?
-// Basically everything fits into SmapMessageList
-func (a *Archiver) HandleQuery(querystring string, ephkey EphemeralKey) (QueryResult, error) {
+// Basically everything fits into common.SmapMessageList
+func (a *Archiver) HandleQuery(querystring string) (QueryResult, error) {
 	var result QueryResult
-	if a.enforceKeys && !a.pm.ValidEphemeralKey(ephkey) {
-		return result, fmt.Errorf("Ephemeral key %v is not valid", ephkey)
-	}
-
 	// parse the query
 	parsed := a.qp.Parse(querystring)
 	if parsed.Err != nil {
 		return result, fmt.Errorf("Error (%v) in query \"%v\" (error at %v)\n", parsed.Err, querystring, parsed.ErrPos)
 	}
-	return a.evaluateQuery(parsed, ephkey)
-
+	return a.evaluateQuery(parsed)
 }
 
-func (a *Archiver) evaluateQuery(parsed *querylang.ParsedQuery, ephkey EphemeralKey) (QueryResult, error) {
+func (a *Archiver) evaluateQuery(parsed *querylang.ParsedQuery) (QueryResult, error) {
 	var result QueryResult
-	// execute the query
 	switch parsed.QueryType {
 	case querylang.SELECT_TYPE:
-		return a.handleSelect(parsed, ephkey)
+		if parsed.Distinct {
+			params := parsed.GetParams().(*common.DistinctParams)
+			return a.DistinctTag(params)
+		}
+		params := parsed.GetParams().(*common.TagParams)
+		return a.SelectTags(params)
 	case querylang.DELETE_TYPE:
-		return result, a.handleDelete(parsed, ephkey)
+		params := parsed.GetParams()
+		switch t := params.(type) {
+		case *common.TagParams:
+			return result, a.DeleteTags(t)
+		case *common.DataParams:
+			return result, a.DeleteData(t)
+		default:
+			return result, errors.New("Invalid DELETE type")
+		}
 	case querylang.SET_TYPE:
-		return result, a.handleSet(parsed, ephkey)
+		params := parsed.GetParams().(*common.SetParams)
+		return result, a.SetTags(params)
 	case querylang.DATA_TYPE:
-		return a.handleData(parsed, ephkey)
-	default:
-		return result, fmt.Errorf("Could not decide query type %v", parsed.Querystring)
-	}
-}
-
-func (a *Archiver) HandleNewSubscriber(subscriber *Subscriber, querystring string, ephkey EphemeralKey) error {
-	subscriber.query = a.qp.Parse(querystring)
-	return a.broker.NewSubscriber(subscriber)
-}
-
-func (a *Archiver) handleSelect(parsed *querylang.ParsedQuery, ephkey EphemeralKey) (QueryResult, error) {
-	//TODO: filter results by EphKey
-	if parsed.Distinct {
-		return a.mdStore.GetDistinct(parsed.Target[0], parsed.Where)
-	}
-	return a.mdStore.GetTags(parsed.Target, parsed.Where)
-}
-
-func (a *Archiver) handleData(parsed *querylang.ParsedQuery, ephkey EphemeralKey) (SmapMessageList, error) {
-	var (
-		result   = SmapMessageList{}
-		readings []SmapNumbersResponse
-	)
-
-	uuids, err := a.mdStore.GetUUIDs(parsed.Where)
-	if err != nil {
-		return result, err
-	}
-
-	if parsed.Data.Limit.Streamlimit > 0 && len(uuids) > 0 {
-		uuids = uuids[:parsed.Data.Limit.Streamlimit]
-	}
-
-	start := uint64(parsed.Data.Start.UnixNano())
-	end := uint64(parsed.Data.End.UnixNano())
-
-	switch parsed.Data.Dtype {
-	case querylang.IN_TYPE:
-		log.Debugf("Data in start %v end %v", start, end)
-		if start < end {
-			readings, err = a.tsStore.GetData(uuids, start, end)
-		} else {
-			readings, err = a.tsStore.GetData(uuids, end, start)
+		params := parsed.GetParams().(*common.DataParams)
+		if params.IsStatistical || params.IsWindow {
+			return a.SelectStatisticalData(params)
 		}
-	case querylang.BEFORE_TYPE:
-		log.Debugf("Data before time %v (%v ns)", parsed.Data.Start, start)
-		readings, err = a.tsStore.Prev(uuids, start)
-	case querylang.AFTER_TYPE:
-		log.Debugf("Data after time %v (%v ns)", parsed.Data.Start, start)
-		readings, err = a.tsStore.Next(uuids, start)
-	}
-
-	for _, resp := range readings {
-		if len(resp.Readings) > 0 {
-			msg := &SmapMessage{UUID: resp.UUID}
-			for _, rdg := range resp.Readings {
-				rdg.ConvertTime(UOT_NS, UnitOfTime(parsed.Data.Timeconv))
-				msg.Readings = append(msg.Readings, rdg)
-			}
-			result = append(result, msg)
+		switch parsed.Data.Dtype {
+		case querylang.IN_TYPE:
+			return a.SelectDataRange(params)
+		case querylang.BEFORE_TYPE:
+			return a.SelectDataBefore(params)
+		case querylang.AFTER_TYPE:
+			return a.SelectDataAfter(params)
 		}
-	}
-	log.Debugf("Returning %d readings", len(result))
 
+	}
 	return result, nil
 }
 
-func (a *Archiver) handleDelete(parsed *querylang.ParsedQuery, ephkey EphemeralKey) error {
-	if len(parsed.Target) > 0 {
-		// remove tags
-		log.Debugf("Removing tags %v docs where %v", parsed.Target, parsed.Where)
-		return a.mdStore.RemoveTags(parsed.Target, parsed.Where)
-	}
-	log.Debugf("Removing all docs where %v", parsed.Where)
-	return a.mdStore.RemoveDocs(parsed.Where)
-}
-
-func (a *Archiver) handleSet(parsed *querylang.ParsedQuery, ephkey EphemeralKey) error {
-	log.Debugf("Apply updates %v where %v", parsed.Set, parsed.Where)
-	if len(parsed.Set) == 0 {
-		return nil
-	}
-	return a.mdStore.UpdateDocs(parsed.Set, parsed.Where)
+func (a *Archiver) HandleNewSubscriber(subscriber *Subscriber, querystring string) error {
+	subscriber.query = a.qp.Parse(querystring)
+	return a.broker.NewSubscriber(subscriber)
 }

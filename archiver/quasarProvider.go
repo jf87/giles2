@@ -3,12 +3,13 @@ package archiver
 import (
 	"bytes"
 	"fmt"
-	qtree "github.com/SoftwareDefinedBuildings/btrdb/qtree"
-	capn "github.com/glycerine/go-capnproto"
-	qsr "github.com/jf87/giles2/archiver/quasarcapnp"
-	"github.com/satori/go.uuid"
 	"net"
 	"sync"
+
+	capn "github.com/glycerine/go-capnproto"
+	qsr "github.com/jf87/giles2/archiver/quasarcapnp"
+	"github.com/jf87/giles2/common"
+	"github.com/satori/go.uuid"
 )
 
 type quasarDB struct {
@@ -37,7 +38,7 @@ func newQuasarDB(c *quasarConfig) *quasarDB {
 	q := &quasarDB{
 		addr:           c.addr,
 		mdStore:        c.mdStore,
-		maxConnections: c.maxConnections,
+		maxConnections: 200,
 	}
 	log.Noticef("Connecting to Quasar at %v...", q.addr.String())
 	q.packetpool = sync.Pool{
@@ -75,7 +76,7 @@ func (q *quasarDB) getConnection() *tsConn {
 	return &tsConn{conn, false}
 }
 
-func (q *quasarDB) AddMessage(msg *SmapMessage) error {
+func (q *quasarDB) AddMessage(msg *common.SmapMessage) error {
 	var (
 		parsed_uuid uuid.UUID
 		err         error
@@ -110,43 +111,8 @@ func (q *quasarDB) AddMessage(msg *SmapMessage) error {
 	return nil
 }
 
-func (q *quasarDB) AddBuffer(buf *streamBuffer) error {
-	var (
-		parsed_uuid uuid.UUID
-		err         error
-	)
-	if len(buf.readings) == 0 {
-		return nil
-	}
-	conn := q.connpool.Get()
-	defer q.connpool.Put(conn)
-	if parsed_uuid, err = uuid.FromString(string(buf.uuid)); err != nil {
-		return err
-	}
-	qr := q.packetpool.Get().(quasarReading)
-	qr.ins.SetUuid(parsed_uuid.Bytes())
-	rl := qsr.NewRecordList(qr.seg, buf.idx)
-	rla := rl.ToArray()
-	for i, val := range buf.readings[:buf.idx] {
-		rla[i].SetTime(int64(val.GetTime()))
-		if num, ok := val.GetValue().(float64); ok {
-			rla[i].SetValue(num)
-		} else {
-			return fmt.Errorf("Bad number in buffer %v %v", buf.uuid, val)
-		}
-	}
-	qr.ins.SetValues(rl)
-	qr.req.SetInsertValues(*qr.ins)
-	qr.seg.WriteTo(conn)
-	if _, err = q.receive(conn); err != nil {
-		return fmt.Errorf("Error writing to quasar %v", err)
-	}
-	q.packetpool.Put(qr)
-	return nil
-}
-
-func (quasar *quasarDB) queryNearestValue(uuids []UUID, start uint64, backwards bool) ([]SmapNumbersResponse, error) {
-	var ret = make([]SmapNumbersResponse, len(uuids))
+func (quasar *quasarDB) queryNearestValue(uuids []common.UUID, start uint64, backwards bool) ([]common.SmapNumbersResponse, error) {
+	var ret = make([]common.SmapNumbersResponse, len(uuids))
 	conn := quasar.connpool.Get()
 	defer quasar.connpool.Put(conn)
 	for i, uu := range uuids {
@@ -172,16 +138,16 @@ func (quasar *quasarDB) queryNearestValue(uuids []UUID, start uint64, backwards 
 	return ret, nil
 }
 
-func (q *quasarDB) Prev(uuids []UUID, start uint64) ([]SmapNumbersResponse, error) {
+func (q *quasarDB) Prev(uuids []common.UUID, start uint64) ([]common.SmapNumbersResponse, error) {
 	return q.queryNearestValue(uuids, start, true)
 }
 
-func (q *quasarDB) Next(uuids []UUID, start uint64) ([]SmapNumbersResponse, error) {
+func (q *quasarDB) Next(uuids []common.UUID, start uint64) ([]common.SmapNumbersResponse, error) {
 	return q.queryNearestValue(uuids, start, false)
 }
 
-func (q *quasarDB) GetData(uuids []UUID, start uint64, end uint64) ([]SmapNumbersResponse, error) {
-	var ret = make([]SmapNumbersResponse, len(uuids))
+func (q *quasarDB) GetData(uuids []common.UUID, start uint64, end uint64) ([]common.SmapNumbersResponse, error) {
+	var ret = make([]common.SmapNumbersResponse, len(uuids))
 	conn := q.connpool.Get()
 	defer q.connpool.Put(conn)
 	for i, uu := range uuids {
@@ -207,8 +173,89 @@ func (q *quasarDB) GetData(uuids []UUID, start uint64, end uint64) ([]SmapNumber
 	return ret, nil
 }
 
-func (q *quasarDB) receive(conn *tsConn) (SmapNumbersResponse, error) {
-	var sr = SmapNumbersResponse{}
+func (q *quasarDB) StatisticalData(uuids []common.UUID, pointWidth int, start, end uint64) ([]common.StatisticalNumbersResponse, error) {
+	var ret = make([]common.StatisticalNumbersResponse, len(uuids))
+	conn := q.connpool.Get()
+	defer q.connpool.Put(conn)
+	for i, uu := range uuids {
+		seg := capn.NewBuffer(nil)
+		req := qsr.NewRootRequest(seg)
+		query := qsr.NewCmdQueryStatisticalValues(seg)
+		uuid, _ := uuid.FromString(string(uu))
+		query.SetUuid(uuid.Bytes())
+		query.SetStartTime(int64(start))
+		query.SetEndTime(int64(end))
+		query.SetPointWidth(uint8(pointWidth))
+		req.SetQueryStatisticalValues(query)
+		_, err := seg.WriteTo(conn) // here, ignoring # bytes written
+		if err != nil {
+			return ret, err
+		}
+		sr, err := q.receiveStats(conn)
+		if err != nil {
+			return ret, err
+		}
+		sr.UUID = uu
+		ret[i] = sr
+	}
+	return ret, nil
+}
+
+//TODO: fix?
+func (q *quasarDB) WindowData(uuids []common.UUID, pointWidth, start, end uint64) ([]common.StatisticalNumbersResponse, error) {
+	var ret = make([]common.StatisticalNumbersResponse, len(uuids))
+	conn := q.connpool.Get()
+	defer q.connpool.Put(conn)
+	for i, uu := range uuids {
+		seg := capn.NewBuffer(nil)
+		req := qsr.NewRootRequest(seg)
+		query := qsr.NewCmdQueryStatisticalValues(seg)
+		uuid, _ := uuid.FromString(string(uu))
+		query.SetUuid(uuid.Bytes())
+		query.SetStartTime(int64(start))
+		query.SetEndTime(int64(end))
+		query.SetPointWidth(uint8(pointWidth))
+		req.SetQueryStatisticalValues(query)
+		_, err := seg.WriteTo(conn) // here, ignoring # bytes written
+		if err != nil {
+			return ret, err
+		}
+		sr, err := q.receiveStats(conn)
+		if err != nil {
+			return ret, err
+		}
+		sr.UUID = uu
+		ret[i] = sr
+	}
+	return ret, nil
+}
+
+func (q *quasarDB) DeleteData(uuids []common.UUID, start, end uint64) error {
+	conn := q.connpool.Get()
+	defer q.connpool.Put(conn)
+	for _, uu := range uuids {
+		seg := capn.NewBuffer(nil)
+		req := qsr.NewRootRequest(seg)
+		del := qsr.NewCmdDeleteValues(seg)
+		uuid, _ := uuid.FromString(string(uu))
+		del.SetUuid(uuid.Bytes())
+		del.SetStartTime(int64(start))
+		del.SetEndTime(int64(end))
+		req.SetDeleteValues(del)
+		_, err := seg.WriteTo(conn) // here, ignoring # bytes written
+		if err != nil {
+			return err
+		}
+		_, err = q.receive(conn)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (q *quasarDB) receive(conn *tsConn) (common.SmapNumbersResponse, error) {
+	var sr = common.SmapNumbersResponse{}
 	seg, err := capn.ReadFromStream(conn, nil)
 	if err != nil {
 		conn.Close()
@@ -228,9 +275,9 @@ func (q *quasarDB) receive(conn *tsConn) (SmapNumbersResponse, error) {
 		if resp.StatusCode() != 0 {
 			return sr, fmt.Errorf("Error when reading from Quasar: %v", resp.StatusCode().String())
 		}
-		sr.Readings = []*SmapNumberReading{}
+		sr.Readings = []*common.SmapNumberReading{}
 		for _, rec := range resp.Records().Values().ToArray() {
-			sr.Readings = append(sr.Readings, &SmapNumberReading{Time: uint64(rec.Time()), Value: rec.Value()})
+			sr.Readings = append(sr.Readings, &common.SmapNumberReading{Time: uint64(rec.Time()), Value: rec.Value()})
 		}
 		return sr, nil
 	default:
@@ -240,10 +287,46 @@ func (q *quasarDB) receive(conn *tsConn) (SmapNumbersResponse, error) {
 
 }
 
-func (q *quasarDB) ValidTimestamp(time uint64, uot UnitOfTime) bool {
-	var err error
-	if uot != UOT_NS {
-		time, err = convertTime(time, uot, UOT_NS)
+func (q *quasarDB) receiveStats(conn *tsConn) (common.StatisticalNumbersResponse, error) {
+	var sr = common.StatisticalNumbersResponse{}
+	seg, err := capn.ReadFromStream(conn, nil)
+	if err != nil {
+		conn.Close()
+		log.Errorf("Error receiving data from Quasar %v", err)
+		return sr, err
 	}
-	return time >= 0 && time <= qtree.MaximumTime && err == nil
+	resp := qsr.ReadRootResponse(seg)
+
+	//log.Debug("qsr resp %v", resp.Which())
+	//log.Debug("status code %v", resp.StatusCode())
+	switch resp.Which() {
+	case qsr.RESPONSE_VOID:
+		if resp.StatusCode() != qsr.STATUSCODE_OK {
+			return sr, fmt.Errorf("Received error status code when writing: %v", resp.StatusCode())
+		}
+	case qsr.RESPONSE_RECORDS:
+		if resp.StatusCode() != 0 {
+			return sr, fmt.Errorf("Error when reading from Quasar: %v", resp.StatusCode().String())
+		}
+		sr.Readings = []*common.StatisticalNumberReading{}
+		for _, rec := range resp.StatisticalRecords().Values().ToArray() {
+			sr.Readings = append(sr.Readings, &common.StatisticalNumberReading{
+				Time: uint64(rec.Time()), Count: rec.Count(),
+				Min: rec.Min(), Mean: rec.Mean(), Max: rec.Max(),
+				UoT: common.UOT_NS})
+		}
+		return sr, nil
+	default:
+		return sr, fmt.Errorf("Got unexpected Quasar Error code (%v)", resp.StatusCode().String())
+	}
+	return sr, nil
+
+}
+
+func (q *quasarDB) ValidTimestamp(time uint64, uot common.UnitOfTime) bool {
+	var err error
+	if uot != common.UOT_NS {
+		time, err = common.ConvertTime(time, uot, common.UOT_NS)
+	}
+	return time >= 0 && time <= MaximumTime && err == nil
 }

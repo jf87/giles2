@@ -6,9 +6,8 @@ import (
 	"bufio"
 	"fmt"
 	"github.com/taylorchu/toki"
-    "github.com/jf87/giles2/internal/unitoftime"
+    "github.com/jf87/giles2/common"
 	"strconv"
-	"gopkg.in/mgo.v2/bson"
     _time "time"
 )
 
@@ -20,16 +19,16 @@ Notes here
 
 %union{
 	str string
-	dict qDict
+	dict common.Dict
 	data *DataQuery
 	limit Limit
-    timeconv unitoftime.UnitOfTime
+    timeconv common.UnitOfTime
 	list List
 	time _time.Time
     timediff _time.Duration
 }
 
-%token <str> SELECT DISTINCT DELETE SET APPLY
+%token <str> SELECT DISTINCT DELETE SET APPLY STATISTICAL WINDOW STATISTICS
 %token <str> WHERE
 %token <str> DATA BEFORE AFTER LIMIT STREAMLIMIT NOW
 %token <str> LVALUE QSTRING
@@ -90,6 +89,12 @@ query		: SELECT selector whereClause SEMICOLON
 				sqlex.(*sqLex).query.where = $3
 				sqlex.(*sqLex).query.qtype = DELETE_TYPE
 			}
+            | DELETE dataClause whereClause SEMICOLON
+            {
+				sqlex.(*sqLex).query.data = $2
+				sqlex.(*sqLex).query.where = $3
+				sqlex.(*sqLex).query.qtype = DELETE_TYPE
+            }
 			| DELETE whereClause SEMICOLON
 			{
 				sqlex.(*sqLex).query.Contents = []string{}
@@ -125,15 +130,15 @@ valueList   : qstring
 
 setList     : lvalue EQ qstring
             {
-                $$ = qDict{$1: $3}
+                $$ = common.Dict{$1: $3}
             }
             | lvalue EQ NUMBER
             {
-                $$ = qDict{$1: $3}
+                $$ = common.Dict{$1: $3}
             }
             | lvalue EQ valueListBrack
             {
-                $$ = qDict{$1: $3}
+                $$ = common.Dict{$1: $3}
             }
             | lvalue EQ qstring COMMA setList
             {
@@ -175,19 +180,43 @@ selector	: tagList
 
 dataClause : DATA IN LPAREN timeref COMMA timeref RPAREN limit timeconv
 			{
-				$$ = &DataQuery{Dtype: IN_TYPE, Start: $4, End: $6, Limit: $8, Timeconv: $9}
+				$$ = &DataQuery{Dtype: IN_TYPE, Start: $4, End: $6, Limit: $8, Timeconv: $9, IsStatistical: false, IsWindow: false}
 			}
 		   | DATA IN timeref COMMA timeref limit timeconv
 			{
-				$$ = &DataQuery{Dtype: IN_TYPE, Start: $3, End: $5, Limit: $6, Timeconv: $7}
+				$$ = &DataQuery{Dtype: IN_TYPE, Start: $3, End: $5, Limit: $6, Timeconv: $7, IsStatistical: false, IsWindow: false}
+			}
+		   | STATISTICAL LPAREN NUMBER RPAREN DATA IN LPAREN timeref COMMA timeref RPAREN limit timeconv
+			{
+                num, err := strconv.ParseInt($3, 10, 64)
+                if err != nil {
+				    sqlex.(*sqLex).Error(fmt.Sprintf("Could not parse integer \"%v\" (%v)", $1, err.Error()))
+                }
+				$$ = &DataQuery{Dtype: IN_TYPE, Start: $8, End: $10, Limit: $12, Timeconv: $13, IsStatistical: true, IsWindow: false, PointWidth: uint64(num)}
+			}
+		   | STATISTICS LPAREN NUMBER RPAREN DATA IN LPAREN timeref COMMA timeref RPAREN limit timeconv
+			{
+                num, err := strconv.ParseInt($3, 10, 64)
+                if err != nil {
+				    sqlex.(*sqLex).Error(fmt.Sprintf("Could not parse integer \"%v\" (%v)", $1, err.Error()))
+                }
+				$$ = &DataQuery{Dtype: IN_TYPE, Start: $8, End: $10, Limit: $12, Timeconv: $13, IsStatistical: true, IsWindow: false, PointWidth: uint64(num)}
+			}
+		   | WINDOW LPAREN NUMBER lvalue RPAREN DATA IN LPAREN timeref COMMA timeref RPAREN limit timeconv
+			{
+                dur, err := common.ParseReltime($3, $4)
+                if err != nil {
+				    sqlex.(*sqLex).Error(fmt.Sprintf("Error parsing relative time \"%v %v\" (%v)", $3, $4, err.Error()))
+                }
+				$$ = &DataQuery{Dtype: IN_TYPE, Start: $9, End: $11, Limit: $13, Timeconv: $14, IsStatistical: false, IsWindow: true, Width: uint64(dur.Nanoseconds())}
 			}
 		   | DATA BEFORE timeref limit timeconv
 			{
-				$$ = &DataQuery{Dtype: BEFORE_TYPE, Start: $3, Limit: $4, Timeconv: $5}
+				$$ = &DataQuery{Dtype: BEFORE_TYPE, Start: $3, Limit: $4, Timeconv: $5, IsStatistical: false, IsWindow: false}
 			}
 		   | DATA AFTER timeref limit timeconv
 			{
-				$$ = &DataQuery{Dtype: AFTER_TYPE, Start: $3, Limit: $4, Timeconv: $5}
+				$$ = &DataQuery{Dtype: AFTER_TYPE, Start: $3, Limit: $4, Timeconv: $5, IsStatistical: false, IsWindow: false}
 			}
 		   ;
 
@@ -203,7 +232,7 @@ timeref		: abstime
 
 abstime		: NUMBER LVALUE
             {
-                foundtime, err := unitoftime.ParseAbsTime($1, $2)
+                foundtime, err := common.ParseAbsTime($1, $2)
                 if err != nil {
 				    sqlex.(*sqLex).Error(fmt.Sprintf("Could not parse time \"%v %v\" (%v)", $1, $2, err.Error()))
                 }
@@ -242,18 +271,18 @@ abstime		: NUMBER LVALUE
 reltime		: NUMBER lvalue
             {
                 var err error
-                $$, err = unitoftime.ParseReltime($1, $2)
+                $$, err = common.ParseReltime($1, $2)
                 if err != nil {
 				    sqlex.(*sqLex).Error(fmt.Sprintf("Error parsing relative time \"%v %v\" (%v)", $1, $2, err.Error()))
                 }
             }
 			| NUMBER lvalue reltime
             {
-                newDuration, err := unitoftime.ParseReltime($1, $2)
+                newDuration, err := common.ParseReltime($1, $2)
                 if err != nil {
 				    sqlex.(*sqLex).Error(fmt.Sprintf("Error parsing relative time \"%v %v\" (%v)", $1, $2, err.Error()))
                 }
-                $$ = unitoftime.AddDurations(newDuration, $3)
+                $$ = common.AddDurations(newDuration, $3)
             }
 			;
 
@@ -293,11 +322,11 @@ limit		: /* empty */
 
 timeconv    : /* empty */
             {
-                $$ = unitoftime.UOT_MS
+                $$ = common.UOT_MS
             }
             | AS LVALUE
             {
-                uot, err := unitoftime.ParseUOT($2)
+                uot, err := common.ParseUOT($2)
                 if err != nil {
                     sqlex.(*sqLex).Error(fmt.Sprintf("Could not parse unit of time %v (%v)", $2, err))
                 }
@@ -316,31 +345,35 @@ whereClause : WHERE whereList
 
 whereTerm : lvalue LIKE qstring
 			{
-				$$ = qDict{fixMongoKey($1): qDict{"$regex": $3}}
+				$$ = common.Dict{fixMongoKey($1): common.Dict{"$regex": $3}}
 			}
 		  | lvalue EQ qstring
 			{
-				$$ = qDict{fixMongoKey($1): $3}
+				$$ = common.Dict{fixMongoKey($1): $3}
 			}
           | lvalue EQ NUMBER
             {
-				$$ = qDict{fixMongoKey($1): $3}
+				$$ = common.Dict{fixMongoKey($1): $3}
             }
 		  | lvalue NEQ qstring
 			{
-				$$ = qDict{fixMongoKey($1): qDict{"$neq": $3}}
+				$$ = common.Dict{fixMongoKey($1): common.Dict{"$neq": $3}}
 			}
 		  | HAS lvalue
 			{
-				$$ = qDict{fixMongoKey($2): qDict{"$exists": true}}
+				$$ = common.Dict{fixMongoKey($2): common.Dict{"$exists": true}}
 			}
           | valueListBrack IN lvalue
             {
-                $$ = qDict{fixMongoKey($3): qDict{"$in": $1}}
+                $$ = common.Dict{fixMongoKey($3): common.Dict{"$in": $1}}
             }
           | valueListBrack NOT IN lvalue
             {
-                $$ = qDict{fixMongoKey($3): qDict{"$not": qDict{"$in": $1}}}
+                $$ = common.Dict{fixMongoKey($3): common.Dict{"$not": common.Dict{"$in": $1}}}
+            }
+          | LPAREN whereTerm RPAREN
+            {
+                $$ = $2
             }
 		  ;
 
@@ -358,25 +391,21 @@ lvalue    : LVALUE
           }
           ;
 
-whereList : whereList AND whereList
+whereList : whereList AND whereTerm
 			{
-				$$ = qDict{"$and": []qDict{$1, $3}}
+				$$ = common.Dict{"$and": []common.Dict{$1, $3}}
 			}
-		  | whereList OR whereList
+		  | whereList OR whereTerm
 			{
-				$$ = qDict{"$or": []qDict{$1, $3}}
+				$$ = common.Dict{"$or": []common.Dict{$1, $3}}
 			}
-		  | NOT whereList
+		  | NOT whereTerm
 			{
-                tmp := make(qDict)
+                tmp := make(common.Dict)
                 for k,v := range $2 {
-                    tmp[k] = qDict{"$ne": v}
+                    tmp[k] = common.Dict{"$ne": v}
                 }
 				$$ = tmp
-			}
-		  | LPAREN whereList RPAREN
-			{
-				$$ = $2
 			}
 		  | whereTerm
 			{
@@ -393,7 +422,6 @@ var supported_formats = []string{"1/2/2006",
                                  "1/2/2006 15:04:05 MST",
                                  "1-2-2006 15:04:05 MST",
                                  "2006-1-2 15:04:05 MST"}
-type qDict map[string]interface{}
 type List []string
 
 func (qt QueryType) String() string {
@@ -417,9 +445,9 @@ type query struct {
 	// information about a data query if we are one
 	data	   *DataQuery
     // key-value pairs to add
-    set         qDict
+    set         common.Dict
 	// where clause for query
-	where	  qDict
+	where	  common.Dict
 	// are we querying distinct values?
 	distinct  bool
 	// list of tags to target for deletion, selection
@@ -438,22 +466,6 @@ func (q *query) Print() {
 	fmt.Printf("Contents: %v\n", q.Contents)
 	fmt.Printf("Distinct? %v\n", q.distinct)
 	fmt.Printf("where: %v\n", q.where)
-}
-
-func (q *query) ContentsBson() bson.M {
-    ret := bson.M{}
-    for _, tag := range q.Contents {
-        ret[tag] = 1
-    }
-    return ret
-}
-
-func (q *query) WhereBson() bson.M {
-    return bson.M(q.where)
-}
-
-func (q *query) SetBson() bson.M {
-    return bson.M(q.set)
 }
 
 type sqLex struct {
@@ -476,6 +488,9 @@ func NewSQLex(s string) *sqLex {
             {Token: APPLY, Pattern: "apply"},
 			{Token: DELETE, Pattern: "delete"},
 			{Token: DISTINCT, Pattern: "distinct"},
+			{Token: STATISTICAL, Pattern: "statistical"},
+			{Token: STATISTICS, Pattern: "statistics"},
+			{Token: WINDOW, Pattern: "window"},
 			{Token: LIMIT, Pattern: "limit"},
 			{Token: STREAMLIMIT, Pattern: "streamlimit"},
 			{Token: ALL, Pattern: "\\*"},
@@ -507,7 +522,7 @@ func NewSQLex(s string) *sqLex {
 			{Token: QSTRING, Pattern: "(\"[^\"\\\\]*?(\\.[^\"\\\\]*?)*?\")|('[^'\\\\]*?(\\.[^'\\\\]*?)*?')"},
 		})
 	scanner.SetInput(s)
-	q := &query{Contents: []string{}, distinct: false, data: &DataQuery{}}
+	q := &query{Contents: []string{}, distinct: false}
 	return &sqLex{query: q, querystring: s, scanner: scanner, error: nil, lasttoken: "", _keys: map[string]struct{}{}, tokens: []string{}}
 }
 

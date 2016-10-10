@@ -5,15 +5,20 @@ import (
 	"gopkg.in/gcfg.v1"
 )
 
+type BOSSWAVE struct {
+	Enabled    bool
+	Address    string
+	Entityfile string
+	Namespace  string
+	ListenNS   []string
+}
+
 type Config struct {
 	Archiver struct {
 		TimeseriesStore *string
 		MetadataStore   *string
 		Objects         *string
-		Keepalive       *int
-		EnforceKeys     bool
 		LogLevel        *string
-		MaxConnections  *int
 		PeriodicReport  bool
 	}
 
@@ -38,15 +43,12 @@ type Config struct {
 		UpdateInterval *int
 	}
 
-	Venkman struct {
-		Port    *string
-		Address *string
-	}
-
 	HTTP struct {
 		Enabled bool
 		Port    *int
 	}
+
+	BOSSWAVE BOSSWAVE
 
 	WebSocket struct {
 		Enabled bool
@@ -63,17 +65,6 @@ type Config struct {
 		AddPort       *int
 		QueryPort     *int
 		SubscribePort *int
-	}
-
-	SSH struct {
-		Enabled            bool
-		Port               *string
-		PrivateKey         *string
-		AuthorizedKeysFile *string
-		User               *string
-		Pass               *string
-		PasswordEnabled    bool
-		KeyAuthEnabled     bool
 	}
 
 	Profile struct {
@@ -111,7 +102,6 @@ func PrintConfig(c *Config) {
 	case "quasar":
 		fmt.Println("	at address", *c.Quasar.Address, ":", *c.Quasar.Port)
 	}
-	fmt.Println("	with keepalive", *c.Archiver.Keepalive)
 
 	if c.Profile.Enabled {
 		fmt.Println("Profiling enabled for", *c.Profile.BenchmarkTimer, "seconds!")

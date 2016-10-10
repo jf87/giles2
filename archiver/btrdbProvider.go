@@ -1,311 +1,213 @@
 package archiver
 
 import (
-	"errors"
 	"fmt"
-	qtree "github.com/SoftwareDefinedBuildings/btrdb/qtree"
-	capn "github.com/glycerine/go-capnproto"
-	btrdb "github.com/jf87/giles2/archiver/btrdbcapnp"
-	"github.com/satori/go.uuid"
+	"math/rand"
 	"net"
 	"sync"
+	"time"
+
+	btrdb "github.com/SoftwareDefinedBuildings/btrdb-go"
+	"github.com/jf87/giles2/common"
+	uuid "github.com/pborman/uuid"
+	"github.com/pkg/errors"
 )
+
+type btrdbConfig struct {
+	addr    *net.TCPAddr
+	mdStore MetadataStore
+}
 
 var BtrDBReadErr = errors.New("Error receiving data from BtrDB")
 
-type btrdbDB struct {
-	addr           *net.TCPAddr
-	mdStore        MetadataStore
-	maxConnections int
-	packetpool     sync.Pool
-	connpool       *connectionPool
+const MaximumTime = (48 << 56)
+
+type btrIface struct {
+	addr    *net.TCPAddr
+	mdStore MetadataStore
+	client  *btrdb.BTrDBConnection
+	clients []*btrdb.BTrDBConnection
+	sync.RWMutex
 }
 
-type btrdbConfig struct {
-	addr           *net.TCPAddr
-	mdStore        MetadataStore
-	maxConnections int
-}
-
-type btrdbReading struct {
-	seg *capn.Segment
-	req *btrdb.Request
-	ins *btrdb.CmdInsertValues
-}
-
-func newBtrDB(c *btrdbConfig) *btrdbDB {
+func newBtrIface(c *btrdbConfig) *btrIface {
+	rand.Seed(time.Now().UnixNano())
 	var err error
-	b := &btrdbDB{
-		addr:           c.addr,
-		mdStore:        c.mdStore,
-		maxConnections: c.maxConnections,
+	b := &btrIface{
+		addr:    c.addr,
+		mdStore: c.mdStore,
+		clients: make([]*btrdb.BTrDBConnection, 10),
 	}
-
 	log.Noticef("Connecting to BtrDB at %v...", b.addr.String())
 
-	b.packetpool = sync.Pool{
-		New: func() interface{} {
-			seg := capn.NewBuffer(nil)
-			req := btrdb.NewRootRequest(seg)
-			req.SetEchoTag(0)
-			ins := btrdb.NewCmdInsertValues(seg)
-			ins.SetSync(false)
-			return btrdbReading{
-				seg: seg,
-				req: &req,
-				ins: &ins,
-			}
-		},
+	if b.client, err = btrdb.NewBTrDBConnection(c.addr.String()); err != nil {
+		log.Fatalf("Could not connect to btrdb: %v", err)
 	}
 
-	if b.connpool, err = NewConnectionPool(b.getConnection, b.maxConnections); err != nil {
-		log.Fatal(err)
+	for i := 0; i < 10; i++ {
+		c, err := btrdb.NewBTrDBConnection(c.addr.String())
+		if err != nil {
+			log.Fatalf("Could not connect to btrdb: %v", err)
+		}
+		b.clients[i] = c
 	}
+
 	return b
 }
 
-func (b *btrdbDB) getConnection() *tsConn {
-	conn, err := net.DialTCP("tcp", nil, b.addr)
-	if err != nil {
-		log.Errorf("Error getting connection to BtrDB (%v)", err)
-		return nil
-	}
-	conn.SetKeepAlive(true)
-	return &tsConn{conn, false}
+func (bdb *btrIface) getClient() *btrdb.BTrDBConnection {
+	bdb.RLock()
+	defer bdb.RUnlock()
+	return bdb.clients[rand.Intn(10)]
 }
 
-func (b *btrdbDB) receiveData(conn *tsConn) (SmapNumbersResponse, error) {
-	var (
-		sr       = SmapNumbersResponse{}
-		finished = false
-	)
-	sr.Readings = []*SmapNumberReading{}
-
-	for !finished {
-		// wait for response on given connection
-		seg, err := capn.ReadFromStream(conn, nil)
-		if err != nil {
-			conn.Close()
-			log.Errorf("Error receiving data from BtrDB %v", err)
-			return sr, BtrDBReadErr
-		}
-		resp := btrdb.ReadRootResponse(seg)
-		switch resp.Which() {
-		case btrdb.RESPONSE_VOID:
-			return sr, fmt.Errorf("Got a RESPONSE_VOID with statuscode %v, but was expecting data", resp.StatusCode().String())
-		case btrdb.RESPONSE_RECORDS:
-			if resp.StatusCode() != btrdb.STATUSCODE_OK {
-				return sr, fmt.Errorf("Error when reading from BtrDB: %v", resp.StatusCode().String())
-			}
-			for _, rec := range resp.Records().Values().ToArray() {
-				sr.Readings = append(sr.Readings, &SmapNumberReading{Time: uint64(rec.Time()), Value: rec.Value()})
-			}
-			finished = resp.Final()
-		default:
-			log.Errorf("Got unexpected type: %v with status code %v", resp.Which(), resp.StatusCode().String())
-		}
-	}
-	return sr, nil
-}
-
-func (b *btrdbDB) receiveStatus(conn *tsConn) error {
-	// wait for response on the given connection
-	seg, err := capn.ReadFromStream(conn, nil)
-	if err != nil {
-		conn.Close()
-		log.Errorf("Error receiving data from BtrDB %v", err)
-		return BtrDBReadErr
-	}
-	resp := btrdb.ReadRootResponse(seg)
-
-	// react to the type of message
-	if resp.Which() == btrdb.RESPONSE_VOID && resp.StatusCode() != btrdb.STATUSCODE_OK {
-		return fmt.Errorf("Received error status code when writing: %v", resp.StatusCode().String())
-	} else {
-		return fmt.Errorf("Received a non-VOID response %v with statuscode %v. Probably receiveData was intended?", resp.Which(), resp.StatusCode().String())
-	}
-}
-
-func (b *btrdbDB) AddMessage(msg *SmapMessage) error {
+func (bdb *btrIface) AddMessage(msg *common.SmapMessage) error {
 	var (
 		parsed_uuid uuid.UUID
 		err         error
 	)
 
 	// turn the string representation into UUID bytes
-	if parsed_uuid, err = uuid.FromString(string(msg.UUID)); err != nil {
-		return err
-	}
+	parsed_uuid = uuid.Parse(string(msg.UUID))
 
-	// fetch a mostly preallocated packet from the pool
-	pkt := b.packetpool.Get().(btrdbReading)
-	// set the UUID
-	pkt.ins.SetUuid(parsed_uuid.Bytes())
-	// allocate space for the readings we're going to commit
-	records := btrdb.NewRecordList(pkt.seg, len(msg.Readings))
-	// insert readings
-	recordsArr := records.ToArray()
-	for i, val := range msg.Readings {
-		recordsArr[i].SetTime(int64(val.GetTime()))
-		if num, ok := val.GetValue().(float64); ok {
-			recordsArr[i].SetValue(num)
-		} else {
-			return fmt.Errorf("Bad number in message %v %v", msg.UUID, val)
+	records := make([]btrdb.StandardValue, len(msg.Readings))
+	for i, rdg := range msg.Readings {
+		rdg.ConvertTime(common.UOT_NS)
+		num, ok := rdg.GetValue().(float64)
+		if !ok {
+			return fmt.Errorf("Bad number in message %v %v", msg.UUID, rdg)
 		}
+		records[i] = btrdb.StandardValue{Time: int64(rdg.GetTime()), Value: num}
 	}
-	pkt.ins.SetValues(records)
-
-	// set packet type
-	pkt.req.SetInsertValues(*pkt.ins)
-
-	// write to the database
-	err = b.reliableWriteStatus(&pkt)
-	b.packetpool.Put(pkt)
+	client := bdb.getClient()
+	c, err := client.InsertValues(parsed_uuid, records, false)
+	<-c // wait for response
 	return err
 }
 
-func (b *btrdbDB) AddBuffer(buf *streamBuffer) error {
-	var (
-		parsed_uuid uuid.UUID
-		err         error
-	)
-	if len(buf.readings) == 0 {
-		return nil
+func (bdb *btrIface) numberResponseFromChan(c chan btrdb.StandardValue) common.SmapNumbersResponse {
+	var sr = common.SmapNumbersResponse{
+		Readings: []*common.SmapNumberReading{},
 	}
-	if parsed_uuid, err = uuid.FromString(string(buf.uuid)); err != nil {
-		return err
+	for val := range c {
+		sr.Readings = append(sr.Readings, &common.SmapNumberReading{Time: uint64(val.Time), Value: val.Value, UoT: common.UOT_NS})
 	}
-	pkt := b.packetpool.Get().(btrdbReading)
-	pkt.ins.SetUuid(parsed_uuid.Bytes())
-	rl := btrdb.NewRecordList(pkt.seg, buf.idx)
-	rla := rl.ToArray()
-	for i, val := range buf.readings[:buf.idx] {
-		rla[i].SetTime(int64(val.GetTime()))
-		if num, ok := val.GetValue().(float64); ok {
-			rla[i].SetValue(num)
-		} else {
-			return fmt.Errorf("Bad number in buffer %v %v", buf.uuid, val)
-		}
-	}
-	pkt.ins.SetValues(rl)
-	pkt.req.SetInsertValues(*pkt.ins)
-	// write to the database
-	err = b.reliableWriteStatus(&pkt)
-	b.packetpool.Put(pkt)
-	return err
+	return sr
 }
 
-func (b *btrdbDB) queryNearestValue(uuids []UUID, start uint64, backwards bool) ([]SmapNumbersResponse, error) {
-	var ret = make([]SmapNumbersResponse, len(uuids))
-	conn := b.connpool.Get()
-	defer b.connpool.Put(conn)
-	for i, uu := range uuids {
-		seg := capn.NewBuffer(nil)
-		req := btrdb.NewRootRequest(seg)
-		query := btrdb.NewCmdQueryNearestValue(seg)
-		query.SetBackward(backwards)
-		uuid, _ := uuid.FromString(string(uu))
-		query.SetUuid(uuid.Bytes())
-		query.SetTime(int64(start))
-		req.SetQueryNearestValue(query)
-		_, err := seg.WriteTo(conn) // here, ignoring # bytes written
+func (bdb *btrIface) statisticalResponseFromChan(c chan btrdb.StatisticalValue) common.StatisticalNumbersResponse {
+	var sr = common.StatisticalNumbersResponse{
+		Readings: []*common.StatisticalNumberReading{},
+	}
+	for val := range c {
+		sr.Readings = append(sr.Readings, &common.StatisticalNumberReading{Time: uint64(val.Time), Count: val.Count, Min: val.Min, Max: val.Max, Mean: val.Mean, UoT: common.UOT_NS})
+	}
+	return sr
+}
+
+func (bdb *btrIface) queryNearestValue(uuids []common.UUID, start uint64, backwards bool) ([]common.SmapNumbersResponse, error) {
+	var ret = make([]common.SmapNumbersResponse, len(uuids))
+	var results []chan btrdb.StandardValue
+	client := bdb.getClient()
+	for _, uu := range uuids {
+		uuid := uuid.Parse(string(uu))
+		values, _, _, err := client.QueryNearestValue(uuid, int64(start), backwards, 0)
 		if err != nil {
 			return ret, err
 		}
-		sr, err := b.receiveData(conn)
-		if err != nil {
-			return ret, err
-		}
-		sr.UUID = uu
+		results = append(results, values)
+	}
+	for i, c := range results {
+		sr := bdb.numberResponseFromChan(c)
+		sr.UUID = uuids[i]
 		ret[i] = sr
 	}
 	return ret, nil
 }
 
-func (b *btrdbDB) Prev(uuids []UUID, start uint64) ([]SmapNumbersResponse, error) {
-	return b.queryNearestValue(uuids, start, true)
+func (bdb *btrIface) Prev(uuids []common.UUID, start uint64) ([]common.SmapNumbersResponse, error) {
+	return bdb.queryNearestValue(uuids, start, true)
 }
 
-func (b *btrdbDB) Next(uuids []UUID, start uint64) ([]SmapNumbersResponse, error) {
-	return b.queryNearestValue(uuids, start, false)
+func (bdb *btrIface) Next(uuids []common.UUID, start uint64) ([]common.SmapNumbersResponse, error) {
+	return bdb.queryNearestValue(uuids, start, false)
 }
 
-func (b *btrdbDB) GetData(uuids []UUID, start, end uint64) ([]SmapNumbersResponse, error) {
-	var ret = make([]SmapNumbersResponse, len(uuids))
-	for i, uu := range uuids {
-		seg := capn.NewBuffer(nil)
-		req := btrdb.NewRootRequest(seg)
-		query := btrdb.NewCmdQueryStandardValues(seg)
-		uuid, _ := uuid.FromString(string(uu))
-		query.SetUuid(uuid.Bytes())
-		query.SetStartTime(int64(start))
-		query.SetEndTime(int64(end))
-		req.SetQueryStandardValues(query)
-		sr, err := b.reliableWriteData(seg)
+func (bdb *btrIface) GetData(uuids []common.UUID, start, end uint64) ([]common.SmapNumbersResponse, error) {
+	var ret = make([]common.SmapNumbersResponse, len(uuids))
+	var results []chan btrdb.StandardValue
+	client := bdb.getClient()
+	for _, uu := range uuids {
+		uuid := uuid.Parse(string(uu))
+		values, _, _, err := client.QueryStandardValues(uuid, int64(start), int64(end), 0)
 		if err != nil {
 			return ret, err
 		}
-		sr.UUID = uu
+		results = append(results, values)
+	}
+	for i, c := range results {
+		sr := bdb.numberResponseFromChan(c)
+		sr.UUID = uuids[i]
 		ret[i] = sr
 	}
 	return ret, nil
 }
 
-func (b *btrdbDB) ValidTimestamp(time uint64, uot UnitOfTime) bool {
-	var err error
-	if uot != UOT_NS {
-		time, err = convertTime(time, uot, UOT_NS)
+func (bdb *btrIface) StatisticalData(uuids []common.UUID, pointWidth int, start, end uint64) ([]common.StatisticalNumbersResponse, error) {
+	var ret = make([]common.StatisticalNumbersResponse, len(uuids))
+	var results []chan btrdb.StatisticalValue
+	client := bdb.getClient()
+	for _, uu := range uuids {
+		uuid := uuid.Parse(string(uu))
+		values, _, _, err := client.QueryStatisticalValues(uuid, int64(start), int64(end), uint8(pointWidth), 0)
+		if err != nil {
+			return ret, err
+		}
+		results = append(results, values)
 	}
-	return time >= 0 && time <= qtree.MaximumTime && err == nil
+	for i, c := range results {
+		sr := bdb.statisticalResponseFromChan(c)
+		sr.UUID = uuids[i]
+		ret[i] = sr
+	}
+	return ret, nil
 }
 
-func (b *btrdbDB) reliableWriteStatus(pkt *btrdbReading) error {
-	var (
-		conn *tsConn
-		err  error
-	)
-	for {
-		conn = b.connpool.Get()
-		if !conn.IsClosed() {
-			pkt.seg.WriteTo(conn)
-			if err = b.receiveStatus(conn); err == BtrDBReadErr {
-				conn.Close()
-				b.connpool.Put(conn)
-				//fmt.Errorf("Error writing to btrdb %v", err)
-				continue
-			} else if err != nil { // if not read error
-				b.connpool.Put(conn)
-				return err
-			}
+func (bdb *btrIface) WindowData(uuids []common.UUID, width, start, end uint64) ([]common.StatisticalNumbersResponse, error) {
+	var ret = make([]common.StatisticalNumbersResponse, len(uuids))
+	var results []chan btrdb.StatisticalValue
+	client := bdb.getClient()
+	for _, uu := range uuids {
+		uuid := uuid.Parse(string(uu))
+		values, _, _, err := client.QueryWindowValues(uuid, int64(start), int64(end), width, 0, 0)
+		if err != nil {
+			return ret, err
 		}
-		break
+		results = append(results, values)
 	}
-	b.connpool.Put(conn)
+	for i, c := range results {
+		sr := bdb.statisticalResponseFromChan(c)
+		sr.UUID = uuids[i]
+		ret[i] = sr
+	}
+	return ret, nil
+}
+
+func (bdb *btrIface) DeleteData(uuids []common.UUID, start uint64, end uint64) error {
+	client := bdb.getClient()
+	for _, uu := range uuids {
+		uuid := uuid.Parse(string(uu))
+		if _, err := client.DeleteValues(uuid, int64(start), int64(end)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func (b *btrdbDB) reliableWriteData(seg *capn.Segment) (SmapNumbersResponse, error) {
-	var (
-		sr   SmapNumbersResponse
-		conn *tsConn
-		err  error
-	)
-	for {
-		conn = b.connpool.Get()
-		if !conn.IsClosed() {
-			seg.WriteTo(conn)
-			if sr, err = b.receiveData(conn); err == BtrDBReadErr {
-				conn.Close()
-				b.connpool.Put(conn)
-				//fmt.Errorf("Error writing to btrdb %v", err)
-				continue
-			} else if err != nil { // if not read error
-				b.connpool.Put(conn)
-				return sr, err
-			}
-		}
-		break
+func (bdb *btrIface) ValidTimestamp(time uint64, uot common.UnitOfTime) bool {
+	var err error
+	if uot != common.UOT_NS {
+		time, err = common.ConvertTime(time, uot, common.UOT_NS)
 	}
-	b.connpool.Put(conn)
-	return sr, nil
+	return time >= 0 && time <= MaximumTime && err == nil
 }

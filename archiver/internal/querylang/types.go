@@ -1,16 +1,21 @@
 package querylang
 
 import (
-	"github.com/jf87/giles2/internal/unitoftime"
 	"time"
+
+	"github.com/jf87/giles2/common"
 )
 
 type DataQuery struct {
-	Dtype    DataQueryType
-	Start    time.Time
-	End      time.Time
-	Limit    Limit
-	Timeconv unitoftime.UnitOfTime
+	Dtype         DataQueryType
+	Start         time.Time
+	End           time.Time
+	Limit         Limit
+	Timeconv      common.UnitOfTime
+	IsStatistical bool
+	IsWindow      bool
+	Width         uint64
+	PointWidth    uint64
 }
 
 type Limit struct {
