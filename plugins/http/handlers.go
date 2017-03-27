@@ -22,12 +22,14 @@
 package http
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	giles "github.com/jf87/giles2/archiver"
 	"github.com/jf87/giles2/common"
@@ -55,7 +57,7 @@ type HTTPHandler struct {
 
 func NewHTTPHandler(a *giles.Archiver) *HTTPHandler {
 	r := httprouter.New()
-	h := &HTTPHandler{a, r}
+	h := &HTTPHandler{a, basicAuth(r)}
 	r.POST("/add/:key", h.handleAdd)
 	r.POST("/api/query/:key", h.handleSingleQuery)
 	r.POST("/api/query", h.handleSingleQuery)
@@ -64,6 +66,40 @@ func NewHTTPHandler(a *giles.Archiver) *HTTPHandler {
 	r.POST("/subscribe", h.handleSubscriber)
 	r.POST("/subscribe/:key", h.handleSubscriber)
 	return h
+}
+
+func basicAuth(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+
+		s := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
+		if len(s) != 2 {
+			http.Error(w, "Not authorized", 401)
+			return
+		}
+
+		b, err := base64.StdEncoding.DecodeString(s[1])
+		if err != nil {
+			http.Error(w, err.Error(), 401)
+			return
+		}
+
+		pair := strings.SplitN(string(b), ":", 2)
+		if len(pair) != 2 {
+			http.Error(w, "Not authorized", 401)
+			return
+		}
+
+		if gUsers[pair[0]].Password == pair[1] {
+			//if pair[0] == "username" && pair[1] == "password" {
+			h.ServeHTTP(w, r)
+		} else {
+
+			http.Error(w, "Not authorized", 401)
+			return
+		}
+	})
 }
 
 func Handle(a *giles.Archiver, port int) {

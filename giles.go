@@ -26,6 +26,15 @@ var configfile = flag.String("c", "giles.cfg", "Path to Giles configuration file
 // logger
 var log *logging.Logger
 
+var gUsers Users
+
+type Users map[string]User
+
+type User struct {
+	User     string
+	Password string
+}
+
 func init() {
 	log = logging.MustGetLogger("giles")
 	var format = "%{color}%{level} %{time:Jan 02 15:04:05} %{shortfile}%{color:reset} ▶ %{message}"
@@ -36,6 +45,12 @@ func init() {
 }
 
 func main() {
+	gUsers = make(map[string]User)
+	var u User
+	u.User = "jofu"
+	u.Password = "password"
+
+	gUsers["jofu"] = u
 
 	signals := make(chan os.Signal, 1)
 	done := make(chan bool)
