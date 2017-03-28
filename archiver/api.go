@@ -12,6 +12,11 @@ func (a *Archiver) DistinctTag(params *common.DistinctParams) (QueryResult, erro
 	return a.mdStore.GetDistinct(params.Tag, params.Where.ToBson())
 }
 
+//check for user/password
+func (a *Archiver) GetUser(params *common.UserParams) bool {
+	return a.mdStore.GetUser(params.Where.ToBson())
+}
+
 // selects data for the matching streams within the range given
 // by Begin/End
 func (a *Archiver) SelectDataRange(params *common.DataParams) (common.SmapMessageList, error) {

@@ -37,6 +37,8 @@ type Archiver struct {
 	broker *Broker
 	// metrics
 	metrics metricMap
+	//config
+	Config *Config
 }
 
 // Returns a new archiver object from a configuration. Will Fatal out of the
@@ -103,6 +105,8 @@ func NewArchiver(c *Config) (a *Archiver) {
 	if c.Archiver.PeriodicReport {
 		a.startReport()
 	}
+	a.Config = c
+
 	return
 }
 

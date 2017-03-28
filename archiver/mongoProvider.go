@@ -3,13 +3,14 @@ package archiver
 // mongo provider for metadata store
 import (
 	"fmt"
+	"net"
+	"sync/atomic"
+	"time"
+
 	"github.com/jf87/giles2/common"
 	"github.com/karlseguin/ccache"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
-	"net"
-	"sync/atomic"
-	"time"
 )
 
 // default select clause to ignore internal variables
@@ -19,6 +20,7 @@ type mongoStore struct {
 	session  *mgo.Session
 	db       *mgo.Database
 	metadata *mgo.Collection
+	users    *mgo.Collection
 
 	pool *mongoConnectionPool
 
@@ -52,6 +54,7 @@ func newMongoStore(c *mongoConfig) *mongoStore {
 	// fetch/create collections and db reference
 	m.db = m.session.DB("archiver")
 	m.metadata = m.db.C("metadata")
+	m.users = m.db.C("users")
 
 	// add indexes. This will fail Fatal
 	m.addIndexes()
@@ -292,6 +295,23 @@ func (m *mongoStore) SaveTags(msg *common.SmapMessage) error {
 		m.uomCache.Set(string(msg.UUID), msg.Properties.UnitOfMeasure, m.cacheExpiry)
 	}
 	return err
+}
+
+func (m *mongoStore) GetUser(where bson.M) bool {
+	var x []bson.M
+	err := m.users.Find(where).All(&x)
+	if err != nil {
+		return false
+	}
+	if len(x) == 1 {
+		if where["user"] == x[0]["user"] {
+			if where["password"] == x[0]["password"] {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 func (m *mongoStore) UpdateDocs(updates, where bson.M) error {

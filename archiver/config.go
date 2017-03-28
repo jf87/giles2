@@ -2,6 +2,7 @@ package archiver
 
 import (
 	"fmt"
+
 	"gopkg.in/gcfg.v1"
 )
 
@@ -72,6 +73,10 @@ type Config struct {
 		MemProfile     *string
 		BenchmarkTimer *int
 		Enabled        bool
+	}
+
+	Authentication struct {
+		Enabled bool
 	}
 }
 

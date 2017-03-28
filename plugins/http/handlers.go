@@ -22,6 +22,7 @@
 package http
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -40,6 +41,15 @@ import (
 // logger
 var log *logging.Logger
 
+var GUsers Users
+
+type Users map[string]User
+
+type User struct {
+	User     string
+	Password string
+}
+
 // set up logging facilities
 func init() {
 	log = logging.MustGetLogger("http")
@@ -57,49 +67,54 @@ type HTTPHandler struct {
 
 func NewHTTPHandler(a *giles.Archiver) *HTTPHandler {
 	r := httprouter.New()
-	h := &HTTPHandler{a, basicAuth(r)}
-	r.POST("/add/:key", h.handleAdd)
-	r.POST("/api/query/:key", h.handleSingleQuery)
-	r.POST("/api/query", h.handleSingleQuery)
-	r.POST("/republish", h.handleRepublisher)
-	r.POST("/republish/:key", h.handleRepublisher)
+	h := &HTTPHandler{a, r}
+	r.POST("/add", basicAuth(h.handleAdd, a))
+	//r.POST("/api/query", h.handleSingleQuery)
+	r.POST("/api/query", basicAuth(h.handleSingleQuery, a))
+	r.POST("/republish", basicAuth(h.handleRepublisher, a))
 	r.POST("/subscribe", h.handleSubscriber)
-	r.POST("/subscribe/:key", h.handleSubscriber)
 	return h
 }
 
-func basicAuth(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func basicAuth(h httprouter.Handle, a *giles.Archiver) httprouter.Handle {
+	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		if a.Config.Authentication.Enabled {
+			const basicAuthPrefix string = "Basic "
 
-		w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+			// Get the Basic Authentication credentials
+			auth := r.Header.Get("Authorization")
+			if strings.HasPrefix(auth, basicAuthPrefix) {
+				// Check credentials
+				payload, err := base64.StdEncoding.DecodeString(auth[len(basicAuthPrefix):])
+				if err == nil {
+					pair := bytes.SplitN(payload, []byte(":"), 2)
+					//if len(pair) == 2 && bytes.Equal(pair[0], user) && bytes.Equal(pair[1], pass) {
+					if len(pair) == 2 {
+						var u common.UserParams
+						m := make(common.Dict)
+						m["name"] = string(pair[0])
+						m["password"] = string(pair[1])
+						u.Where = m
+						valid := a.GetUser(&u)
+						if valid {
+							// Delegate request to the given handle
+							h(w, r, ps)
+							return
+						}
+					}
+				}
+			}
 
-		s := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
-		if len(s) != 2 {
-			http.Error(w, "Not authorized", 401)
-			return
-		}
+			// Request Basic Authentication otherwise
+			w.Header().Set("WWW-Authenticate", "Basic realm=Restricted")
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 
-		b, err := base64.StdEncoding.DecodeString(s[1])
-		if err != nil {
-			http.Error(w, err.Error(), 401)
-			return
-		}
-
-		pair := strings.SplitN(string(b), ":", 2)
-		if len(pair) != 2 {
-			http.Error(w, "Not authorized", 401)
-			return
-		}
-
-		if gUsers[pair[0]].Password == pair[1] {
-			//if pair[0] == "username" && pair[1] == "password" {
-			h.ServeHTTP(w, r)
 		} else {
-
-			http.Error(w, "Not authorized", 401)
+			// Delegate request to the given handle
+			h(w, r, ps)
 			return
 		}
-	})
+	}
 }
 
 func Handle(a *giles.Archiver, port int) {

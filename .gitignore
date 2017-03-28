@@ -9,3 +9,4 @@ archiver/cpu.out
 archiver/mem.out
 archiver/internal/querylang/y.output
 archiver/y.output
+giles-test.cfg

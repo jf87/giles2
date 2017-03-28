@@ -4,6 +4,10 @@ import (
 	"fmt"
 )
 
+type UserParams struct {
+	Where Dict
+}
+
 type QueryParams interface {
 	Dump() string
 }
