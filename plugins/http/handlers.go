@@ -129,7 +129,13 @@ func Handle(a *giles.Archiver, port int) {
 	srv := &http.Server{
 		Addr: address.String(),
 	}
-	srv.ListenAndServe()
+	if a.Config.HTTP.TLS {
+		srv.ListenAndServeTLS(*a.Config.HTTP.Certificate, *a.Config.HTTP.Key)
+
+	} else {
+		srv.ListenAndServe()
+
+	}
 }
 
 func (h *HTTPHandler) handleAdd(rw http.ResponseWriter, req *http.Request, ps httprouter.Params) {

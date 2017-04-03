@@ -45,8 +45,11 @@ type Config struct {
 	}
 
 	HTTP struct {
-		Enabled bool
-		Port    *int
+		Enabled     bool
+		Port        *int
+		TLS         bool
+		Certificate *string
+		Key         *string
 	}
 
 	BOSSWAVE BOSSWAVE

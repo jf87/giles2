@@ -37,7 +37,7 @@ type Archiver struct {
 	broker *Broker
 	// metrics
 	metrics metricMap
-	//config
+	// config
 	Config *Config
 }
 
