@@ -83,7 +83,8 @@ func NewHTTPHandler(a *giles.Archiver) *HTTPHandler {
 
 func basicAuth(h httprouter.Handle, a *giles.Archiver) httprouter.Handle {
 	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-		if a.Config.Authentication.Enabled {
+		//if a.Config.Authentication.Enabled {
+		if false {
 			const basicAuthPrefix string = "Basic "
 
 			// Get the Basic Authentication credentials
@@ -107,7 +108,6 @@ func basicAuth(h httprouter.Handle, a *giles.Archiver) httprouter.Handle {
 							if err == nil {
 								// Delegate request to the given handle
 								h(w, r, ps)
-								return
 							}
 						}
 					}
@@ -121,7 +121,6 @@ func basicAuth(h httprouter.Handle, a *giles.Archiver) httprouter.Handle {
 		} else {
 			// Delegate request to the given handle
 			h(w, r, ps)
-			return
 		}
 	}
 }
