@@ -87,8 +87,8 @@ func main() {
 
 	a := archiver.NewArchiver(config)
 
-	if config.HTTP.Enabled {
-		go http.Handle(a, *config.HTTP.Port)
+	if config.HTTP.Enabled || config.HTTPS.Enabled {
+		go http.Handle(a)
 	}
 
 	if config.BOSSWAVE.Enabled {
@@ -96,6 +96,7 @@ func main() {
 	}
 
 	if config.WebSocket.Enabled {
+		log.Noticef("Websocket enabled\n")
 		go websocket.Handle(a, *config.WebSocket.Port)
 	}
 

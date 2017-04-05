@@ -14,7 +14,7 @@ type MetadataStore interface {
 	GetDistinct(tag string, where bson.M) (common.DistinctResult, error)
 	GetUUIDs(where bson.M) ([]common.UUID, error)
 
-	GetUser(where bson.M) bool
+	GetUser(where bson.M) (string, error)
 
 	SaveTags(msg *common.SmapMessage) error
 

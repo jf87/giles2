@@ -45,9 +45,13 @@ type Config struct {
 	}
 
 	HTTP struct {
+		Enabled bool
+		Port    *int
+	}
+
+	HTTPS struct {
 		Enabled     bool
 		Port        *int
-		TLS         bool
 		Certificate *string
 		Key         *string
 	}

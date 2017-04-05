@@ -13,7 +13,7 @@ func (a *Archiver) DistinctTag(params *common.DistinctParams) (QueryResult, erro
 }
 
 //check for user/password
-func (a *Archiver) GetUser(params *common.UserParams) bool {
+func (a *Archiver) GetUser(params *common.UserParams) (string, error) {
 	return a.mdStore.GetUser(params.Where.ToBson())
 }
 

@@ -297,21 +297,21 @@ func (m *mongoStore) SaveTags(msg *common.SmapMessage) error {
 	return err
 }
 
-func (m *mongoStore) GetUser(where bson.M) bool {
+func (m *mongoStore) GetUser(where bson.M) (string, error) {
 	var x []bson.M
 	err := m.users.Find(where).All(&x)
 	if err != nil {
-		return false
+		return "", err
 	}
 	if len(x) == 1 {
-		if where["user"] == x[0]["user"] {
-			if where["password"] == x[0]["password"] {
-				return true
+		if where["_id"] == x[0]["_id"] {
+			if str, ok := x[0]["password"].(string); ok {
+				return str, nil
 			}
 		}
-		return false
 	}
-	return false
+	err = fmt.Errorf("User not found")
+	return "", err
 }
 
 func (m *mongoStore) UpdateDocs(updates, where bson.M) error {

@@ -32,6 +32,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/crypto/bcrypt"
+
 	giles "github.com/jf87/giles2/archiver"
 	"github.com/jf87/giles2/common"
 	"github.com/julienschmidt/httprouter"
@@ -70,9 +72,12 @@ func NewHTTPHandler(a *giles.Archiver) *HTTPHandler {
 	h := &HTTPHandler{a, r}
 	r.POST("/add", basicAuth(h.handleAdd, a))
 	//r.POST("/api/query", h.handleSingleQuery)
+	//r.POST("/api/query/:key", basicAuth(h.handleSingleQuery, a))
 	r.POST("/api/query", basicAuth(h.handleSingleQuery, a))
 	r.POST("/republish", basicAuth(h.handleRepublisher, a))
+	//r.POST("/republish/:key", basicAuth(h.handleRepublisher, a))
 	r.POST("/subscribe", h.handleSubscriber)
+	//r.POST("/subscribe/:key", h.handleSubscriber)
 	return h
 }
 
@@ -92,14 +97,18 @@ func basicAuth(h httprouter.Handle, a *giles.Archiver) httprouter.Handle {
 					if len(pair) == 2 {
 						var u common.UserParams
 						m := make(common.Dict)
-						m["name"] = string(pair[0])
-						m["password"] = string(pair[1])
+						m["_id"] = string(pair[0])
+						password := pair[1]
+						//m["password"] = string(pair[1])
 						u.Where = m
-						valid := a.GetUser(&u)
-						if valid {
-							// Delegate request to the given handle
-							h(w, r, ps)
-							return
+						hash, err := a.GetUser(&u)
+						if err == nil {
+							err = bcrypt.CompareHashAndPassword([]byte(hash), password)
+							if err == nil {
+								// Delegate request to the given handle
+								h(w, r, ps)
+								return
+							}
 						}
 					}
 				}
@@ -117,24 +126,30 @@ func basicAuth(h httprouter.Handle, a *giles.Archiver) httprouter.Handle {
 	}
 }
 
-func Handle(a *giles.Archiver, port int) {
+func Handle(a *giles.Archiver) {
 	h := NewHTTPHandler(a)
-	address, err := net.ResolveTCPAddr("tcp4", "0.0.0.0:"+strconv.Itoa(port))
-	if err != nil {
-		log.Fatalf("Error resolving address %v: %v", "0.0.0.0:"+strconv.Itoa(port), err)
-	}
 	http.Handle("/", h.handler)
-	log.Noticef("Starting HTTP on %v", address.String())
-
-	srv := &http.Server{
-		Addr: address.String(),
+	if a.Config.HTTP.Enabled {
+		address, err := net.ResolveTCPAddr("tcp4", "0.0.0.0:"+strconv.Itoa(*a.Config.HTTP.Port))
+		if err != nil {
+			log.Fatalf("Error resolving address %v: %v", "0.0.0.0:"+strconv.Itoa(*a.Config.HTTP.Port), err)
+		}
+		log.Noticef("Starting HTTP on %v", address.String())
+		srv := &http.Server{
+			Addr: address.String(),
+		}
+		go srv.ListenAndServe()
 	}
-	if a.Config.HTTP.TLS {
-		srv.ListenAndServeTLS(*a.Config.HTTP.Certificate, *a.Config.HTTP.Key)
-
-	} else {
-		srv.ListenAndServe()
-
+	if a.Config.HTTPS.Enabled {
+		address, err := net.ResolveTCPAddr("tcp4", "0.0.0.0:"+strconv.Itoa(*a.Config.HTTPS.Port))
+		if err != nil {
+			log.Fatalf("Error resolving address %v: %v", "0.0.0.0:"+strconv.Itoa(*a.Config.HTTPS.Port), err)
+		}
+		log.Noticef("Starting HTTPS on %v", address.String())
+		srv := &http.Server{
+			Addr: address.String(),
+		}
+		srv.ListenAndServeTLS(*a.Config.HTTPS.Certificate, *a.Config.HTTPS.Key)
 	}
 }
 
