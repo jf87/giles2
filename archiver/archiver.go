@@ -182,6 +182,7 @@ func (a *Archiver) HandleQuery(querystring string) (QueryResult, error) {
 	return a.evaluateQuery(parsed)
 }
 
+// FIXME
 func (a *Archiver) evaluateQuery(parsed *querylang.ParsedQuery) (QueryResult, error) {
 	var result QueryResult
 	switch parsed.QueryType {
@@ -193,6 +194,7 @@ func (a *Archiver) evaluateQuery(parsed *querylang.ParsedQuery) (QueryResult, er
 		params := parsed.GetParams().(*common.TagParams)
 		return a.SelectTags(params)
 	case querylang.DELETE_TYPE:
+		return result, errors.New("Invalid DELETE type") //FIXME
 		params := parsed.GetParams()
 		switch t := params.(type) {
 		case *common.TagParams:
